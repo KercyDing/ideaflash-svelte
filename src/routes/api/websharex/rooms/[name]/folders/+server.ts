@@ -1,5 +1,6 @@
 import { json } from '@sveltejs/kit';
 import * as websharexDb from '$lib/server/websharex';
+import { uploadFile } from '$lib/server/oss';
 import { nanoid } from 'nanoid';
 import type { RequestHandler } from './$types';
 import type { FolderEntry, WebsharexEntry } from '$lib/websharex/types';
@@ -41,6 +42,20 @@ export const POST: RequestHandler = async ({ request, params }) => {
 
 	const updatedEntries = [...room.entries, newFolder];
 	await websharexDb.updateRoom(roomName, { entries: updatedEntries });
+
+	// 上传.keepfolder文件到OSS
+	try {
+		const folderPath = buildFolderPath(updatedEntries, folderId);
+		const emptyBuffer = Buffer.from('');
+		await uploadFile(emptyBuffer, {
+			fileName: '.keepfolder',
+			folder: folderPath,
+			roomName,
+			preserveFileName: true
+		});
+	} catch (error) {
+		console.error('Failed to create .keepfolder:', error);
+	}
 
 	return json({ success: true, folder: newFolder });
 };

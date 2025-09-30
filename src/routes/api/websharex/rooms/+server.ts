@@ -1,6 +1,6 @@
 import { json } from '@sveltejs/kit';
 import * as websharexDb from '$lib/server/websharex';
-import { deleteFolder } from '$lib/server/oss';
+import { deleteFolder, uploadFile } from '$lib/server/oss';
 import type { RequestHandler } from './$types';
 
 await websharexDb.ensureTable();
@@ -19,6 +19,18 @@ export const POST: RequestHandler = async ({ request }) => {
 	}
 
 	await websharexDb.createRoom(name, password);
+
+	// 在根目录创建.keepfolder
+	try {
+		const emptyBuffer = Buffer.from('');
+		await uploadFile(emptyBuffer, {
+			fileName: '.keepfolder',
+			roomName: name,
+			preserveFileName: true
+		});
+	} catch (error) {
+		console.error('Failed to create root .keepfolder:', error);
+	}
 
 	return json({ success: true });
 };

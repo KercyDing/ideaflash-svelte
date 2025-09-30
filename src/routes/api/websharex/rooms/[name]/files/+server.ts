@@ -1,5 +1,5 @@
 import { json } from '@sveltejs/kit';
-import { uploadMultipleFiles, deleteFile } from '$lib/server/oss';
+import { uploadMultipleFiles, deleteFile, uploadFile, getOSSClient } from '$lib/server/oss';
 import * as websharexDb from '$lib/server/websharex';
 import { nanoid } from 'nanoid';
 import type { RequestHandler } from './$types';
@@ -33,7 +33,26 @@ export const POST: RequestHandler = async ({ request, params }) => {
 
 	try {
 		const folderPath = parentId ? buildFolderPath(room.entries, parentId) : '';
-		const uploadResults = await uploadMultipleFiles(files, {
+		
+		const uploadedFiles = [];
+		
+		for (const file of files) {
+			const result = await uploadFile(file, {
+				roomName,
+				folder: folderPath,
+				fileName: file.name,
+				preserveFileName: true
+			});
+		uploadedFiles.push(result);
+	}
+	
+	try {
+		const keepfolderPath = folderPath 
+			? `websharex/${roomName}/${folderPath}/.keepfolder`
+			: `websharex/${roomName}/.keepfolder`;
+		await deleteFile(keepfolderPath);
+	} catch (err) {
+	}		const uploadResults = await uploadMultipleFiles(files, {
 			folder: folderPath || undefined,
 			roomName,
 			preserveFileName: true
@@ -81,6 +100,25 @@ export const DELETE: RequestHandler = async ({ request, params }) => {
 	}
 
 	try {
+		const folderPath = entry.parentId ? buildFolderPath(room.entries, entry.parentId) : '';
+		const remainingFiles = room.entries.filter(
+			e => e.type === 'file' && e.parentId === entry.parentId && e.id !== entryId
+		);
+		
+		if (remainingFiles.length === 0) {
+			try {
+				const emptyBuffer = Buffer.from('');
+				await uploadFile(emptyBuffer, {
+					fileName: '.keepfolder',
+					folder: folderPath || undefined,
+					roomName,
+					preserveFileName: true
+				});
+			} catch (error) {
+				console.error('Failed to create .keepfolder:', error);
+			}
+		}
+		
 		if (entry.ossObjectName) {
 			await deleteFile(entry.ossObjectName);
 		}

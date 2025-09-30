@@ -106,6 +106,10 @@ export async function uploadMultipleFiles(
 }
 
 export async function deleteFile(objectName: string): Promise<void> {
+	if (objectName === 'websharex/.keepfolder') {
+		return;
+	}
+	
 	const client = getOSSClient();
 	await client.delete(objectName);
 }
@@ -212,8 +216,14 @@ export async function deleteFolder(folderPrefix: string): Promise<void> {
 		const objects = result.objects || [];
 		
 		if (objects.length > 0) {
-			const objectNames = objects.map((obj: any) => obj.name);
-			await client.deleteMulti(objectNames, { quiet: true });
+			// 过滤掉websharex根目录的.keepfolder，永不删除
+			const objectNames = objects
+				.map((obj: any) => obj.name)
+				.filter((name: string) => name !== 'websharex/.keepfolder');
+			
+			if (objectNames.length > 0) {
+				await client.deleteMulti(objectNames, { quiet: true });
+			}
 		}
 		
 		hasMore = result.isTruncated;

@@ -3,6 +3,7 @@
 	import { browser } from '$app/environment';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
+	import { onMount, onDestroy } from 'svelte';
 	import { derived } from 'svelte/store';
 	import { websharexStore } from '$lib/websharex/store';
 	import type { RoomState, WebsharexEntry } from '$lib/websharex/types';
@@ -51,6 +52,7 @@
 	let sortOrder: 'asc' | 'desc' = 'asc';
 	let isDraggingOver = false;
 	let isSyncing = false;
+	let autoSyncInterval: ReturnType<typeof setInterval> | null = null;
 
 	const origin = browser ? window.location.origin : '';
 
@@ -100,6 +102,9 @@
 		showPassword = false;
 		passwordCopyStatus = 'idle';
 		deleteError = '';
+		if (browser) {
+			syncWithOSS().catch(err => console.error('Auto sync failed:', err));
+		}
 	} else if (!roomName && lastRoomName) {
 		lastRoomName = '';
 		showPassword = false;
@@ -339,6 +344,26 @@
 		}
 	}
 
+	// 启动自动同步定时器
+	onMount(() => {
+		setTimeout(() => {
+			if (browser && roomName) {
+				syncWithOSS().catch(err => console.error('Initial sync failed:', err));
+				
+				autoSyncInterval = setInterval(() => {
+					syncWithOSS().catch(err => console.error('Auto sync failed:', err));
+				}, 5000);
+			}
+		}, 100);
+	});
+
+	onDestroy(() => {
+		if (autoSyncInterval) {
+			clearInterval(autoSyncInterval);
+			autoSyncInterval = null;
+		}
+	});
+
 	$: encodedRoom = encodeURIComponent(roomName);
 	$: shareLink =
 		shareTarget && shareTarget.type === 'file' && shareTarget.shareToken
@@ -465,9 +490,8 @@
 		</div>
 
 		<!-- 面包屑导航 -->
-		<div class="flex flex-wrap items-center justify-between text-sm text-muted-foreground mb-2">
-			<div class="flex flex-wrap items-center">
-				<span class="pr-0">~/</span>
+		<div class="flex flex-wrap items-center text-sm text-muted-foreground mb-2">
+			<span class="pr-0">~/</span>
 			<button
 				type="button"
 				class={`inline-flex items-center gap-1 rounded px-2 py-1 transition hover:bg-muted/60 ${
@@ -499,17 +523,6 @@
 					{/if}
 				{/each}
 			{/if}
-			</div>
-			<button
-				type="button"
-				class="inline-flex items-center gap-1.5 rounded border px-2.5 py-1 text-xs font-medium hover:bg-muted disabled:opacity-50 disabled:cursor-not-allowed transition"
-				on:click={syncWithOSS}
-				disabled={isSyncing}
-				title="刷新文件列表"
-			>
-				<Icon icon={isSyncing ? "mdi:loading" : "mdi:refresh"} class="h-3.5 w-3.5 {isSyncing ? 'animate-spin' : ''}" />
-				{isSyncing ? '刷新中...' : '刷新'}
-			</button>
 		</div>
 
 		<div class="overflow-hidden rounded-lg border">

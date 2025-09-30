@@ -1,6 +1,6 @@
 import { json } from '@sveltejs/kit';
 import * as websharexDb from '$lib/server/websharex';
-import { renameFile, renameFolder, deleteFile, deleteFolder } from '$lib/server/oss';
+import { renameFile, renameFolder, deleteFile, deleteFolder, uploadFile } from '$lib/server/oss';
 import type { RequestHandler } from './$types';
 import type { WebsharexEntry } from '$lib/websharex/types';
 
@@ -110,6 +110,27 @@ export const DELETE: RequestHandler = async ({ params }) => {
 		}
 
 		const entriesToDelete = room.entries.filter((e) => removeSet.has(e.id));
+		
+		if (entry.type === 'file') {
+			const folderPath = entry.parentId ? buildFolderPath(room.entries, entry.parentId) : '';
+			const remainingFiles = room.entries.filter(
+				e => e.type === 'file' && e.parentId === entry.parentId && !removeSet.has(e.id)
+			);
+			
+			if (remainingFiles.length === 0) {
+				try {
+					const emptyBuffer = Buffer.from('');
+					await uploadFile(emptyBuffer, {
+						fileName: '.keepfolder',
+						folder: folderPath || undefined,
+						roomName,
+						preserveFileName: true
+					});
+				} catch (error) {
+					console.error('Failed to create .keepfolder:', error);
+				}
+			}
+		}
 		
 		for (const e of entriesToDelete) {
 			if (e.type === 'file' && e.ossObjectName) {

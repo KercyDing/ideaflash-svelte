@@ -2,6 +2,7 @@ import { db } from '$lib/db';
 import { websharexRooms } from '$lib/db/schema';
 import { eq } from 'drizzle-orm';
 import type { RoomState, WebsharexEntry } from '$lib/websharex/types';
+import { uploadFile, getOSSClient } from '$lib/server/oss';
 
 export async function ensureTable() {
 	try {
@@ -15,6 +16,20 @@ export async function ensureTable() {
 				entries JSON NOT NULL DEFAULT ('[]')
 			)
 		`);
+		
+		try {
+			const client = getOSSClient();
+			const keepfolderPath = 'websharex/.keepfolder';
+			
+			try {
+				await client.head(keepfolderPath);
+			} catch (error) {
+				const emptyBuffer = Buffer.from('');
+				await client.put(keepfolderPath, emptyBuffer);
+			}
+		} catch (error) {
+			console.error('Failed to create websharex/.keepfolder:', error);
+		}
 	} catch (error) {
 		console.error('Failed to create table:', error);
 	}
