@@ -25,17 +25,14 @@
 
 - MySQL + Drizzle ORM - 元数据存储
 - 阿里云 OSS - 文件对象存储
-- 自动 `.keep` 文件 - 空文件夹持久化
 
 **OSS 文件结构:**
 
 ```
 websharex/
 ├── {roomName}/
-│   ├── .keep                    # 房间持久化
 │   ├── 文档.pdf                  # 保持原文件名
 │   └── {folderId}/
-│       ├── .keep                # 文件夹持久化
 │       └── 照片.jpg
 ```
 

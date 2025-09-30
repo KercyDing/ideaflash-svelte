@@ -2,6 +2,17 @@ import { json } from '@sveltejs/kit';
 import * as websharexDb from '$lib/server/websharex';
 import { renameFile, renameFolder, deleteFile, deleteFolder } from '$lib/server/oss';
 import type { RequestHandler } from './$types';
+import type { WebsharexEntry } from '$lib/websharex/types';
+
+function buildFolderPath(entries: WebsharexEntry[], folderId: string | null): string {
+	if (!folderId) return '';
+	
+	const folder = entries.find(e => e.id === folderId && e.type === 'folder');
+	if (!folder) return '';
+	
+	const parentPath = folder.parentId ? buildFolderPath(entries, folder.parentId) : '';
+	return parentPath ? `${parentPath}/${folder.name}` : folder.name;
+}
 
 export const PATCH: RequestHandler = async ({ request, params }) => {
 	const roomName = params.name;
@@ -29,11 +40,15 @@ export const PATCH: RequestHandler = async ({ request, params }) => {
 		if (entry.type === 'file' && entry.ossObjectName) {
 			newOssObjectName = await renameFile(entry.ossObjectName, trimmedName);
 		} else if (entry.type === 'folder') {
-			const oldFolderPath = `websharex/${roomName}/${entryId}/`;
-			const newFolderPath = `websharex/${roomName}/${entryId}/`;
-			// OSS文件夹路径保持不变（使用ID），只更新数据库中的显示名称
-			// 如果需要同步重命名OSS中的路径，取消注释下面这行：
-			// await renameFolder(oldFolderPath, newFolderPath);
+			const oldPath = buildFolderPath(room.entries, entryId);
+			const parentPath = entry.parentId ? buildFolderPath(room.entries, entry.parentId) : '';
+			const newPath = parentPath ? `${parentPath}/${trimmedName}` : trimmedName;
+			
+			if (oldPath) {
+				const oldFolderPrefix = `websharex/${roomName}/${oldPath}/`;
+				const newFolderPrefix = `websharex/${roomName}/${newPath}/`;
+				await renameFolder(oldFolderPrefix, newFolderPrefix);
+			}
 		}
 
 		const updatedEntries = room.entries.map((e) => {
@@ -100,8 +115,11 @@ export const DELETE: RequestHandler = async ({ params }) => {
 			if (e.type === 'file' && e.ossObjectName) {
 				await deleteFile(e.ossObjectName);
 			} else if (e.type === 'folder') {
-				const folderPath = `websharex/${roomName}/${e.id}/`;
-				await deleteFolder(folderPath);
+				const folderPath = buildFolderPath(room.entries, e.id);
+				if (folderPath) {
+					const ossFolderPath = `websharex/${roomName}/${folderPath}/`;
+					await deleteFolder(ossFolderPath);
+				}
 			}
 		}
 

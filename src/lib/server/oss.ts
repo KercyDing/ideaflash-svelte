@@ -10,7 +10,7 @@ import { nanoid } from 'nanoid';
 
 let ossClient: OSS | null = null;
 
-function getOSSClient(): OSS {
+export function getOSSClient(): OSS {
 	if (!ossClient) {
 		ossClient = new OSS({
 			region: ALIYUN_OSS_REGION,
@@ -143,16 +143,6 @@ export async function listFiles(prefix: string = 'websharex/'): Promise<any[]> {
 		{}
 	);
 	return result.objects || [];
-}
-
-export async function createKeepFile(path: string): Promise<void> {
-	const client = getOSSClient();
-	const keepPath = `${path}/.keep`;
-	await client.put(keepPath, Buffer.from(''), {
-		headers: {
-			'Content-Type': 'text/plain'
-		}
-	});
 }
 
 export async function renameFile(oldObjectName: string, newFileName: string): Promise<string> {

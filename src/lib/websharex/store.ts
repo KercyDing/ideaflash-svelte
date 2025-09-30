@@ -225,8 +225,7 @@ export function createWebsharexStore() {
 				if (!room) return [];
 				return room.entries.filter(
 					(entry) =>
-						entry.parentId === room.currentFolderId &&
-						entry.name !== '.keep'
+						entry.parentId === room.currentFolderId
 				);
 			});
 		},
@@ -529,6 +528,40 @@ export function createWebsharexStore() {
 					anchor.download = entry.name;
 					anchor.click();
 				}
+			}
+		},
+		async syncRoom(roomName: string) {
+			try {
+				const response = await fetch(
+					`/api/websharex/rooms/${encodeURIComponent(roomName)}/sync`,
+					{
+						method: 'POST'
+					}
+				);
+
+				if (!response.ok) {
+					const error = await response.json();
+					throw new Error(error.error || '同步失败');
+				}
+
+				const result = await response.json();
+				
+				// 重新加载房间数据
+				const room = await apiGetRoom(roomName);
+				if (room) {
+					update((current) => ({
+						...current,
+						rooms: {
+							...current.rooms,
+							[roomName]: room
+						}
+					}));
+				}
+
+				return result;
+			} catch (error) {
+				console.error('Sync failed:', error);
+				throw error;
 			}
 		}
 	};

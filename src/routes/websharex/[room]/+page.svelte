@@ -50,6 +50,7 @@
 	let sortBy: 'name' | 'size' | 'time' = 'name';
 	let sortOrder: 'asc' | 'desc' = 'asc';
 	let isDraggingOver = false;
+	let isSyncing = false;
 
 	const origin = browser ? window.location.origin : '';
 
@@ -78,8 +79,8 @@
 			if (sortBy === 'name') {
 				comparison = a.name.localeCompare(b.name, 'zh-CN');
 			} else if (sortBy === 'size') {
-				const aSize = a.type === 'file' ? a.size : 0;
-				const bSize = b.type === 'file' ? b.size : 0;
+				const aSize = a.type === 'file' ? a.size : calculateFolderSize(a.id);
+				const bSize = b.type === 'file' ? b.size : calculateFolderSize(b.id);
 				comparison = aSize - bSize;
 			} else if (sortBy === 'time') {
 				comparison = new Date(a.updatedAt).getTime() - new Date(b.updatedAt).getTime();
@@ -109,6 +110,29 @@
 	$: displayRoomName = room?.name ?? roomName;
 
 	$: renameValue = renameTarget?.name ?? '';
+
+	function calculateFolderSize(folderId: string): number {
+		if (!room) return 0;
+		
+		let totalSize = 0;
+		
+		// 递归计算文件夹大小
+		const calculateRecursive = (parentId: string | null) => {
+			const children = room.entries.filter(e => e.parentId === parentId);
+			
+			for (const child of children) {
+				if (child.type === 'file') {
+					totalSize += child.size || 0;
+				} else if (child.type === 'folder') {
+					// 递归计算子文件夹
+					calculateRecursive(child.id);
+				}
+			}
+		};
+		
+		calculateRecursive(folderId);
+		return totalSize;
+	}
 
 	function ensureRoomAvailable() {
 		return Boolean(roomName && room);
@@ -302,6 +326,19 @@
 		}, 2000);
 	}
 
+	async function syncWithOSS() {
+		if (!ensureRoomAvailable() || isSyncing) return;
+		isSyncing = true;
+		
+		try {
+			await websharexStore.syncRoom(roomName);
+		} catch (error) {
+			console.error('Sync failed:', error);
+		} finally {
+			isSyncing = false;
+		}
+	}
+
 	$: encodedRoom = encodeURIComponent(roomName);
 	$: shareLink =
 		shareTarget && shareTarget.type === 'file' && shareTarget.shareToken
@@ -378,6 +415,7 @@
 			</div>
 
 			<div class="flex flex-wrap items-center gap-2">
+
 				<label
 					class="inline-flex cursor-pointer items-center gap-2 rounded border border-dashed border-primary/50 px-3 py-2 text-sm font-medium text-primary transition hover:bg-primary/10"
 				>
@@ -427,8 +465,9 @@
 		</div>
 
 		<!-- 面包屑导航 -->
-		<div class="flex flex-wrap items-center text-sm text-muted-foreground mb-2">
-			<span class="pr-0">~/</span>
+		<div class="flex flex-wrap items-center justify-between text-sm text-muted-foreground mb-2">
+			<div class="flex flex-wrap items-center">
+				<span class="pr-0">~/</span>
 			<button
 				type="button"
 				class={`inline-flex items-center gap-1 rounded px-2 py-1 transition hover:bg-muted/60 ${
@@ -460,6 +499,17 @@
 					{/if}
 				{/each}
 			{/if}
+			</div>
+			<button
+				type="button"
+				class="inline-flex items-center gap-1.5 rounded border px-2.5 py-1 text-xs font-medium hover:bg-muted disabled:opacity-50 disabled:cursor-not-allowed transition"
+				on:click={syncWithOSS}
+				disabled={isSyncing}
+				title="刷新文件列表"
+			>
+				<Icon icon={isSyncing ? "mdi:loading" : "mdi:refresh"} class="h-3.5 w-3.5 {isSyncing ? 'animate-spin' : ''}" />
+				{isSyncing ? '刷新中...' : '刷新'}
+			</button>
 		</div>
 
 		<div class="overflow-hidden rounded-lg border">
@@ -580,6 +630,8 @@
 								<td class="hidden px-4 py-3 text-sm text-muted-foreground sm:table-cell">
 									{#if entry.type === 'file'}
 										{formatBytes(entry.size)}
+									{:else}
+										{formatBytes(calculateFolderSize(entry.id))}
 									{/if}
 								</td>
 								<td class="hidden px-4 py-3 text-sm text-muted-foreground md:table-cell">

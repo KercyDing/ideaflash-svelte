@@ -3,7 +3,17 @@ import { uploadMultipleFiles, deleteFile } from '$lib/server/oss';
 import * as websharexDb from '$lib/server/websharex';
 import { nanoid } from 'nanoid';
 import type { RequestHandler } from './$types';
-import type { FileEntry } from '$lib/websharex/types';
+import type { FileEntry, WebsharexEntry } from '$lib/websharex/types';
+
+function buildFolderPath(entries: WebsharexEntry[], folderId: string | null): string {
+	if (!folderId) return '';
+	
+	const folder = entries.find(e => e.id === folderId && e.type === 'folder');
+	if (!folder) return '';
+	
+	const parentPath = folder.parentId ? buildFolderPath(entries, folder.parentId) : '';
+	return parentPath ? `${parentPath}/${folder.name}` : folder.name;
+}
 
 export const POST: RequestHandler = async ({ request, params }) => {
 	const roomName = params.name;
@@ -22,13 +32,12 @@ export const POST: RequestHandler = async ({ request, params }) => {
 	}
 
 	try {
+		const folderPath = parentId ? buildFolderPath(room.entries, parentId) : '';
 		const uploadResults = await uploadMultipleFiles(files, {
+			folder: folderPath || undefined,
 			roomName,
-			folder: parentId || undefined,
 			preserveFileName: true
-		});
-
-		const now = new Date().toISOString();
+		});		const now = new Date().toISOString();
 		const newEntries: FileEntry[] = uploadResults.map((result, index) => ({
 			id: nanoid(),
 			name: files[index].name,

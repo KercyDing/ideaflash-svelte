@@ -1,9 +1,18 @@
 import { json } from '@sveltejs/kit';
 import * as websharexDb from '$lib/server/websharex';
-import { createKeepFile } from '$lib/server/oss';
 import { nanoid } from 'nanoid';
 import type { RequestHandler } from './$types';
-import type { FolderEntry } from '$lib/websharex/types';
+import type { FolderEntry, WebsharexEntry } from '$lib/websharex/types';
+
+function buildFolderPath(entries: WebsharexEntry[], folderId: string | null): string {
+	if (!folderId) return '';
+	
+	const folder = entries.find(e => e.id === folderId && e.type === 'folder');
+	if (!folder) return '';
+	
+	const parentPath = folder.parentId ? buildFolderPath(entries, folder.parentId) : '';
+	return parentPath ? `${parentPath}/${folder.name}` : folder.name;
+}
 
 export const POST: RequestHandler = async ({ request, params }) => {
 	const roomName = params.name;
@@ -32,13 +41,6 @@ export const POST: RequestHandler = async ({ request, params }) => {
 
 	const updatedEntries = [...room.entries, newFolder];
 	await websharexDb.updateRoom(roomName, { entries: updatedEntries });
-
-	try {
-		const folderPath = parentId ? `${parentId}/${folderId}` : folderId;
-		await createKeepFile(`websharex/${roomName}/${folderPath}`);
-	} catch (error) {
-		console.error('Failed to create .keep file:', error);
-	}
 
 	return json({ success: true, folder: newFolder });
 };
