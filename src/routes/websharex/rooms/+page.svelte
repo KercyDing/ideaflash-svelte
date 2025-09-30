@@ -194,7 +194,7 @@
 				on:click={resetReminder}
 			>
 				<Icon icon="mdi:refresh" class="h-4 w-4" />
-				刷新提示
+				刷新
 			</button>
 		</div>
 

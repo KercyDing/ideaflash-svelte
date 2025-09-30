@@ -9,9 +9,78 @@ import type {
 	WebsharexState
 } from './types';
 
-const STORAGE_KEY = 'ideaflash:websharex';
-
 const DEFAULT_STATE: WebsharexState = { rooms: {} };
+
+async function fetchRooms(): Promise<Record<string, RoomState>> {
+	if (!browser) return {};
+	try {
+		const response = await fetch('/api/websharex/rooms');
+		const data = await response.json();
+		const roomsMap: Record<string, RoomState> = {};
+		for (const room of data.rooms) {
+			roomsMap[room.name] = room;
+		}
+		return roomsMap;
+	} catch (error) {
+		console.error('Failed to fetch rooms:', error);
+		return {};
+	}
+}
+
+async function apiCreateRoom(name: string, password: string): Promise<void> {
+	const response = await fetch('/api/websharex/rooms', {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ name, password })
+	});
+	if (!response.ok) {
+		const data = await response.json();
+		throw new Error(data.error || '创建房间失败');
+	}
+}
+
+async function apiDeleteRoom(name: string): Promise<void> {
+	await fetch('/api/websharex/rooms', {
+		method: 'DELETE',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ name })
+	});
+}
+
+async function apiGetRoom(name: string): Promise<RoomState | null> {
+	try {
+		const response = await fetch(`/api/websharex/rooms/${encodeURIComponent(name)}`);
+		if (!response.ok) return null;
+		const data = await response.json();
+		return data.room;
+	} catch (error) {
+		console.error('Failed to get room:', error);
+		return null;
+	}
+}
+
+async function apiUpdateRoom(name: string, data: Partial<RoomState>): Promise<void> {
+	await fetch(`/api/websharex/rooms/${encodeURIComponent(name)}`, {
+		method: 'PATCH',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify(data)
+	});
+}
+
+async function apiVerifyPassword(name: string, password: string): Promise<boolean> {
+	try {
+		const response = await fetch(`/api/websharex/rooms/${encodeURIComponent(name)}`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ password })
+		});
+		const data = await response.json();
+		return data.valid;
+	} catch (error) {
+		console.error('Failed to verify password:', error);
+		return false;
+	}
+}
 
 function generateRandomPassword(length = 6) {
 	const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
@@ -70,49 +139,21 @@ function normalizeState(raw: unknown): WebsharexState {
 		return { rooms: normalizedRooms };
 	}
 
-	if ('entries' in (raw as Record<string, unknown>)) {
-		// Legacy structure migration
-		const legacyEntries = Array.isArray((raw as any).entries)
-			? ((raw as any).entries as WebsharexEntry[]).map(sanitizeEntry)
-			: [];
-		const legacyFolderId = (raw as any).currentFolderId;
-		const legacyRoomName = '默认房间';
-		return {
-			rooms: {
-				[legacyRoomName]: {
-					name: legacyRoomName,
-					password: '',
-					createdAt: new Date().toISOString(),
-					updatedAt: new Date().toISOString(),
-					currentFolderId: legacyFolderId === 'root' ? null : legacyFolderId ?? null,
-					entries: legacyEntries
-				}
-			}
-		};
-	}
-
 	return { ...DEFAULT_STATE };
 }
 
-function loadState(): WebsharexState {
+async function loadState(): Promise<WebsharexState> {
 	if (!browser) {
 		return { ...DEFAULT_STATE };
 	}
 
 	try {
-		const raw = localStorage.getItem(STORAGE_KEY);
-		if (!raw) return { ...DEFAULT_STATE };
-		const parsed = JSON.parse(raw);
-		return normalizeState(parsed);
+		const rooms = await fetchRooms();
+		return { rooms };
 	} catch (error) {
 		console.error('Failed to load WebShareX state', error);
 		return { ...DEFAULT_STATE };
 	}
-}
-
-function persist(state: WebsharexState) {
-	if (!browser) return;
-	localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
 }
 
 function toBase64(file: File): Promise<string> {
@@ -133,10 +174,14 @@ function toBase64(file: File): Promise<string> {
 }
 
 export function createWebsharexStore() {
-	const state = writable<WebsharexState>(loadState());
-	const { subscribe, update } = state;
+	const state = writable<WebsharexState>(DEFAULT_STATE);
+	const { subscribe, update, set } = state;
 
-	subscribe((value) => persist(value));
+	if (browser) {
+		loadState().then((loadedState) => {
+			set(loadedState);
+		});
+	}
 
 	const roomsList: Readable<RoomState[]> = derived(state, ($state) =>
 		Object.values($state.rooms).sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'))
@@ -158,6 +203,9 @@ export function createWebsharexStore() {
 				rooms: { ...current.rooms, [roomName]: nextRoom as RoomState }
 			};
 		});
+		if (nextRoom && browser) {
+			apiUpdateRoom(roomName, nextRoom);
+		}
 		return nextRoom;
 	}
 
@@ -181,7 +229,7 @@ export function createWebsharexStore() {
 		listRoomNames(): string[] {
 			return Object.keys(get(state).rooms);
 		},
-		createRoom(rawName: string, rawPassword?: string) {
+		async createRoom(rawName: string, rawPassword?: string) {
 			const name = rawName.trim();
 			if (!name) {
 				throw new Error('房间名不能为空');
@@ -191,6 +239,9 @@ export function createWebsharexStore() {
 			}
 			const password = rawPassword?.trim() || generateRandomPassword();
 			const now = new Date().toISOString();
+			
+			await apiCreateRoom(name, password);
+			
 			update((current) => ({
 				...current,
 				rooms: {
@@ -207,10 +258,8 @@ export function createWebsharexStore() {
 			}));
 			return password;
 		},
-		verifyRoomAccess(name: string, rawPassword: string) {
-			const room = ensureRoom(name.trim());
-			if (!room) return false;
-			return room.password === rawPassword.trim();
+		async verifyRoomAccess(name: string, rawPassword: string) {
+			return await apiVerifyPassword(name.trim(), rawPassword.trim());
 		},
 		setRoomPassword(name: string, nextPassword: string) {
 			updateRoom(name, (room) => ({
@@ -222,6 +271,11 @@ export function createWebsharexStore() {
 		deleteRoom(name: string) {
 			const room = ensureRoom(name.trim());
 			if (!room) return false;
+			
+			if (browser) {
+				apiDeleteRoom(name);
+			}
+			
 			update((current) => {
 				const { [name]: _removed, ...remainingRooms } = current.rooms;
 				return {

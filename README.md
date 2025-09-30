@@ -1,6 +1,48 @@
 # IdeaFlash
 
-现代化的 SvelteKit 多工具集合，主打高性能与极简交互。当前仓库提供以下模块：
+现代化的 SvelteK## 快速开始
+
+### 1. 安装依赖
+
+```sh
+bun install
+```
+
+### 2. 配置数据库
+
+复制环境变量模板文件:
+
+```sh
+cp .env.local.example .env.local
+```
+
+编辑 `.env.local` 文件,填入你的 MySQL 数据库信息:
+
+```env
+MYSQL_HOST=your_mysql_host
+MYSQL_PORT=3306
+MYSQL_USER=your_mysql_user
+MYSQL_PASSWORD=your_mysql_password
+MYSQL_DATABASE=your_database_name
+```
+
+### 3. 启动开发服务器
+
+```sh
+bun run dev
+```
+
+### 4. 其他命令
+
+```sh
+# 运行类型检查
+bun run check
+
+# 构建生产版本
+bun run build
+```
+
+访问 `http://localhost:5173` 体验应用。交互。当前仓库提供以下模块：
 
 - **WebShareX**：本地模拟的安全文件方舟，可上传、整理、分享文件夹与文件。
 - **Dashboard**：实时可视化看板，展示 WebShareX 的关键使用指标。
