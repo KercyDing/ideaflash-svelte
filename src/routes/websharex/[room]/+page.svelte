@@ -47,6 +47,8 @@
 	let passwordCopyStatus: 'idle' | 'copied' | 'error' = 'idle';
 	let deleteError = '';
 	let lastRoomName = '';
+	let sortBy: 'name' | 'size' | 'time' = 'name';
+	let sortOrder: 'asc' | 'desc' = 'asc';
 
 	const origin = browser ? window.location.origin : '';
 
@@ -65,7 +67,27 @@
 
 	$: roomName = $roomNameStore;
 	$: room = $roomStateStore;
-	$: folderEntries = $entriesStore;
+	$: folderEntries = (() => {
+		let entries = $entriesStore;
+		const folders = entries.filter((e) => e.type === 'folder');
+		const files = entries.filter((e) => e.type === 'file');
+
+		const sortFn = (a: WebsharexEntry, b: WebsharexEntry) => {
+			let comparison = 0;
+			if (sortBy === 'name') {
+				comparison = a.name.localeCompare(b.name, 'zh-CN');
+			} else if (sortBy === 'size') {
+				const aSize = a.type === 'file' ? a.size : 0;
+				const bSize = b.type === 'file' ? b.size : 0;
+				comparison = aSize - bSize;
+			} else if (sortBy === 'time') {
+				comparison = new Date(a.updatedAt).getTime() - new Date(b.updatedAt).getTime();
+			}
+			return sortOrder === 'asc' ? comparison : -comparison;
+		};
+
+		return [...folders.sort(sortFn), ...files.sort(sortFn)];
+	})();
 	$: breadcrumbs = $breadcrumbsStore;
 	$: roomPassword = room?.password ?? '';
 	$: maskedPassword = roomPassword
@@ -89,6 +111,15 @@
 
 	function ensureRoomAvailable() {
 		return Boolean(roomName && room);
+	}
+
+	function toggleSort(column: 'name' | 'size' | 'time') {
+		if (sortBy === column) {
+			sortOrder = sortOrder === 'asc' ? 'desc' : 'asc';
+		} else {
+			sortBy = column;
+			sortOrder = 'asc';
+		}
 	}
 
 	function handleFilesSelected(event: Event) {
@@ -424,9 +455,51 @@
 			<table class="min-w-full divide-y text-sm">
 				<thead class="bg-muted/40">
 					<tr class="text-left text-xs tracking-wider text-muted-foreground uppercase">
-						<th class="px-4 py-3">名称</th>
-						<th class="hidden px-4 py-3 sm:table-cell">大小</th>
-						<th class="hidden px-4 py-3 md:table-cell">更新时间</th>
+						<th class="px-4 py-3">
+							<button
+								type="button"
+								class="inline-flex items-center gap-1 hover:text-foreground transition"
+								on:click={() => toggleSort('name')}
+							>
+								名称
+								{#if sortBy === 'name'}
+									<Icon
+										icon={sortOrder === 'asc' ? 'mdi:arrow-up' : 'mdi:arrow-down'}
+										class="h-3 w-3"
+									/>
+								{/if}
+							</button>
+						</th>
+						<th class="hidden px-4 py-3 sm:table-cell">
+							<button
+								type="button"
+								class="inline-flex items-center gap-1 hover:text-foreground transition"
+								on:click={() => toggleSort('size')}
+							>
+								大小
+								{#if sortBy === 'size'}
+									<Icon
+										icon={sortOrder === 'asc' ? 'mdi:arrow-up' : 'mdi:arrow-down'}
+										class="h-3 w-3"
+									/>
+								{/if}
+							</button>
+						</th>
+						<th class="hidden px-4 py-3 md:table-cell">
+							<button
+								type="button"
+								class="inline-flex items-center gap-1 hover:text-foreground transition"
+								on:click={() => toggleSort('time')}
+							>
+								更新时间
+								{#if sortBy === 'time'}
+									<Icon
+										icon={sortOrder === 'asc' ? 'mdi:arrow-up' : 'mdi:arrow-down'}
+										class="h-3 w-3"
+									/>
+								{/if}
+							</button>
+						</th>
 						<th class="px-4 py-3">操作</th>
 					</tr>
 				</thead>
