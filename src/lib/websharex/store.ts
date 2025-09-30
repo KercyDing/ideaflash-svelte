@@ -1,0 +1,414 @@
+import { browser } from '$app/environment';
+import { derived, get, writable, type Readable } from 'svelte/store';
+import { nanoid } from 'nanoid/non-secure';
+import type {
+	FileEntry,
+	FolderEntry,
+	RoomState,
+	WebsharexEntry,
+	WebsharexState
+} from './types';
+
+const STORAGE_KEY = 'ideaflash:websharex';
+
+const DEFAULT_STATE: WebsharexState = { rooms: {} };
+
+function generateRandomPassword(length = 6) {
+	const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+	let value = '';
+	for (let i = 0; i < length; i += 1) {
+		value += alphabet[Math.floor(Math.random() * alphabet.length)];
+	}
+	return value;
+}
+
+function sanitizeEntry(entry: WebsharexEntry): WebsharexEntry {
+	const parentId = entry.parentId === 'root' ? null : entry.parentId;
+	if (entry.type === 'file') {
+		return {
+			...entry,
+			parentId,
+			expiresAt: entry.expiresAt ?? null,
+			sharedPassword: entry.sharedPassword ?? null,
+			shareToken: entry.shareToken ?? null,
+			shareCreatedAt: entry.shareCreatedAt ?? null
+		};
+	}
+	return {
+		...entry,
+		parentId
+	};
+}
+
+function normalizeRoomState(roomName: string, room: Partial<RoomState> | undefined): RoomState {
+	const now = new Date().toISOString();
+	const entries: WebsharexEntry[] = Array.isArray(room?.entries)
+		? room!.entries.map(sanitizeEntry)
+		: [];
+	return {
+		name: room?.name?.trim() || roomName,
+		password: room?.password ?? generateRandomPassword(),
+		createdAt: room?.createdAt ?? now,
+		updatedAt: room?.updatedAt ?? now,
+		currentFolderId: room?.currentFolderId === 'root' ? null : room?.currentFolderId ?? null,
+		entries
+	};
+}
+
+function normalizeState(raw: unknown): WebsharexState {
+	if (!raw || typeof raw !== 'object') {
+		return { ...DEFAULT_STATE };
+	}
+
+	const maybeRooms = (raw as Record<string, unknown>).rooms;
+	if (maybeRooms && typeof maybeRooms === 'object') {
+		const normalizedRooms: Record<string, RoomState> = {};
+		for (const [key, value] of Object.entries(maybeRooms as Record<string, unknown>)) {
+			const roomName = typeof key === 'string' ? key : String(key);
+			normalizedRooms[roomName] = normalizeRoomState(roomName, value as Partial<RoomState>);
+		}
+		return { rooms: normalizedRooms };
+	}
+
+	if ('entries' in (raw as Record<string, unknown>)) {
+		// Legacy structure migration
+		const legacyEntries = Array.isArray((raw as any).entries)
+			? ((raw as any).entries as WebsharexEntry[]).map(sanitizeEntry)
+			: [];
+		const legacyFolderId = (raw as any).currentFolderId;
+		const legacyRoomName = '默认房间';
+		return {
+			rooms: {
+				[legacyRoomName]: {
+					name: legacyRoomName,
+					password: '',
+					createdAt: new Date().toISOString(),
+					updatedAt: new Date().toISOString(),
+					currentFolderId: legacyFolderId === 'root' ? null : legacyFolderId ?? null,
+					entries: legacyEntries
+				}
+			}
+		};
+	}
+
+	return { ...DEFAULT_STATE };
+}
+
+function loadState(): WebsharexState {
+	if (!browser) {
+		return { ...DEFAULT_STATE };
+	}
+
+	try {
+		const raw = localStorage.getItem(STORAGE_KEY);
+		if (!raw) return { ...DEFAULT_STATE };
+		const parsed = JSON.parse(raw);
+		return normalizeState(parsed);
+	} catch (error) {
+		console.error('Failed to load WebShareX state', error);
+		return { ...DEFAULT_STATE };
+	}
+}
+
+function persist(state: WebsharexState) {
+	if (!browser) return;
+	localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+}
+
+function toBase64(file: File): Promise<string> {
+	return new Promise((resolve, reject) => {
+		const reader = new FileReader();
+		reader.onload = () => {
+			const result = reader.result;
+			if (typeof result === 'string') {
+				const commaIndex = result.indexOf(',');
+				resolve(commaIndex >= 0 ? result.slice(commaIndex + 1) : result);
+			} else {
+				reject(new Error('Unexpected file reader result'));
+			}
+		};
+		reader.onerror = () => reject(reader.error);
+		reader.readAsDataURL(file);
+	});
+}
+
+export function createWebsharexStore() {
+	const state = writable<WebsharexState>(loadState());
+	const { subscribe, update } = state;
+
+	subscribe((value) => persist(value));
+
+	const roomsList: Readable<RoomState[]> = derived(state, ($state) =>
+		Object.values($state.rooms).sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'))
+	);
+
+	function updateRoom(
+		roomName: string,
+		transformer: (room: RoomState) => RoomState
+	): RoomState | undefined {
+		let nextRoom: RoomState | undefined;
+		update((current) => {
+			const room = current.rooms[roomName];
+			if (!room) {
+				return current;
+			}
+			nextRoom = transformer(room);
+			return {
+				...current,
+				rooms: { ...current.rooms, [roomName]: nextRoom as RoomState }
+			};
+		});
+		return nextRoom;
+	}
+
+	function ensureRoom(roomName: string): RoomState | undefined {
+		return get(state).rooms[roomName];
+	}
+
+	return {
+		subscribe,
+		rooms: roomsList,
+		room(roomName: string): Readable<RoomState | undefined> {
+			return derived(state, ($state) => $state.rooms[roomName]);
+		},
+		currentFolderEntries(roomName: string): Readable<WebsharexEntry[]> {
+			return derived(state, ($state) => {
+				const room = $state.rooms[roomName];
+				if (!room) return [];
+				return room.entries.filter((entry) => entry.parentId === room.currentFolderId);
+			});
+		},
+		listRoomNames(): string[] {
+			return Object.keys(get(state).rooms);
+		},
+		deleteRoom(rawName: string) {
+			const name = rawName.trim();
+			if (!name) return false;
+			let deleted = false;
+			update((current) => {
+				if (!current.rooms[name]) {
+					return current;
+				}
+				const { [name]: _removed, ...rest } = current.rooms;
+				deleted = true;
+				return {
+					...current,
+					rooms: rest
+				};
+			});
+			return deleted;
+		},
+		createRoom(rawName: string, rawPassword?: string) {
+			const name = rawName.trim();
+			if (!name) {
+				throw new Error('房间名不能为空');
+			}
+			if (ensureRoom(name)) {
+				throw new Error('房间已存在');
+			}
+			const password = rawPassword?.trim() || generateRandomPassword();
+			const now = new Date().toISOString();
+			update((current) => ({
+				...current,
+				rooms: {
+					...current.rooms,
+					[name]: {
+						name,
+						password,
+						createdAt: now,
+						updatedAt: now,
+						currentFolderId: null,
+						entries: []
+					}
+				}
+			}));
+			return password;
+		},
+		verifyRoomAccess(name: string, rawPassword: string) {
+			const room = ensureRoom(name.trim());
+			if (!room) return false;
+			return room.password === rawPassword.trim();
+		},
+		setRoomPassword(name: string, nextPassword: string) {
+			updateRoom(name, (room) => ({
+				...room,
+				password: nextPassword,
+				updatedAt: new Date().toISOString()
+			}));
+		},
+		setCurrentFolder(roomName: string, id: string | null) {
+			updateRoom(roomName, (room) => ({
+				...room,
+				currentFolderId: id,
+				updatedAt: new Date().toISOString()
+			}));
+		},
+		async uploadFiles(roomName: string, files: FileList | File[]) {
+			const room = ensureRoom(roomName);
+			if (!room) {
+				throw new Error('房间不存在');
+			}
+			const list = Array.from(files);
+			const parentId = room.currentFolderId ?? null;
+			const now = new Date();
+			const payloads = await Promise.all(
+				list.map(async (file) => {
+					const base64 = await toBase64(file);
+					const entry: FileEntry = {
+						id: nanoid(),
+						name: file.name,
+						type: 'file',
+						parentId,
+						size: file.size,
+						mimeType: file.type || 'application/octet-stream',
+						payload: base64,
+						createdAt: now.toISOString(),
+						updatedAt: now.toISOString(),
+						expiresAt: null,
+						sharedPassword: null,
+						shareToken: null,
+						shareCreatedAt: null
+					};
+					return entry;
+				})
+			);
+			updateRoom(roomName, (room) => ({
+				...room,
+				entries: [...room.entries, ...payloads],
+				updatedAt: new Date().toISOString()
+			}));
+		},
+		createFolder(roomName: string, rawName: string) {
+			const room = ensureRoom(roomName);
+			if (!room) {
+				throw new Error('房间不存在');
+			}
+			const name = rawName.trim();
+			if (!name) return;
+			const parentId = room.currentFolderId ?? null;
+			const folder: FolderEntry = {
+				id: nanoid(),
+				name,
+				type: 'folder',
+				parentId,
+				createdAt: new Date().toISOString(),
+				updatedAt: new Date().toISOString()
+			};
+			updateRoom(roomName, (room) => ({
+				...room,
+				entries: [...room.entries, folder],
+				updatedAt: new Date().toISOString()
+			}));
+		},
+		renameEntry(roomName: string, id: string, rawNextName: string) {
+			const name = rawNextName.trim();
+			if (!name) return;
+			updateRoom(roomName, (room) => ({
+				...room,
+				entries: room.entries.map((entry) =>
+					entry.id === id
+						? { ...entry, name, updatedAt: new Date().toISOString() }
+						: entry
+				),
+				updatedAt: new Date().toISOString()
+			}));
+		},
+		deleteEntry(roomName: string, id: string) {
+			updateRoom(roomName, (room) => {
+				const removeSet = new Set<string>([id]);
+				let changed = true;
+				while (changed) {
+					changed = false;
+					for (const entry of room.entries) {
+						const parentId = entry.parentId;
+						if (parentId && removeSet.has(parentId)) {
+							if (!removeSet.has(entry.id)) {
+								removeSet.add(entry.id);
+								changed = true;
+							}
+						}
+					}
+				}
+
+				const nextEntries = room.entries.filter((entry) => !removeSet.has(entry.id));
+				const nextFolderId = removeSet.has(room.currentFolderId ?? '') ? null : room.currentFolderId;
+				return {
+					...room,
+					entries: nextEntries,
+					currentFolderId: nextFolderId,
+					updatedAt: new Date().toISOString()
+				};
+			});
+		},
+		setShareOptions(
+			roomName: string,
+			id: string,
+			options: { enabled: boolean; expiresAt: string | null; sharedPassword: string | null }
+		) {
+			updateRoom(roomName, (room) => ({
+				...room,
+				entries: room.entries.map((entry) =>
+					entry.id === id && entry.type === 'file'
+						? ((): FileEntry => {
+							if (!options.enabled) {
+								return {
+									...entry,
+									expiresAt: null,
+									sharedPassword: null,
+									shareToken: null,
+									shareCreatedAt: null,
+									updatedAt: new Date().toISOString()
+								};
+							}
+
+							const ensureToken = entry.shareToken ?? nanoid();
+							const nowIso = new Date().toISOString();
+							return {
+								...entry,
+								expiresAt: options.expiresAt,
+								sharedPassword: options.sharedPassword,
+								shareToken: ensureToken,
+								shareCreatedAt: entry.shareCreatedAt ?? nowIso,
+								updatedAt: nowIso
+							};
+						})()
+					: entry
+				),
+				updatedAt: new Date().toISOString()
+			}));
+		},
+		getEntryByShareToken(roomName: string, token: string) {
+			const room = ensureRoom(roomName);
+			if (!room) return undefined;
+			return room.entries.find((entry) => entry.type === 'file' && entry.shareToken === token) as
+				| FileEntry
+				| undefined;
+		},
+		findEntryByShareToken(token: string) {
+			const snapshot = get(state).rooms;
+			for (const [name, room] of Object.entries(snapshot)) {
+				const match = room.entries.find(
+					(entry) => entry.type === 'file' && entry.shareToken === token
+				) as FileEntry | undefined;
+				if (match) {
+					return { roomName: name, entry: match };
+				}
+			}
+			return undefined;
+		},
+		downloadFile(roomName: string, id: string) {
+			const room = ensureRoom(roomName);
+			if (!room) return;
+			const entry = room.entries.find((item) => item.id === id);
+			if (!entry || entry.type !== 'file') return;
+
+			const url = `data:${entry.mimeType};base64,${entry.payload}`;
+			const anchor = document.createElement('a');
+			anchor.href = url;
+			anchor.download = entry.name;
+			anchor.click();
+		}
+	};
+}
+
+export const websharexStore = createWebsharexStore();
