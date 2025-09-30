@@ -1,5 +1,6 @@
 import { json } from '@sveltejs/kit';
 import * as websharexDb from '$lib/server/websharex';
+import { createKeepFile, deleteFolder } from '$lib/server/oss';
 import type { RequestHandler } from './$types';
 
 await websharexDb.ensureTable();
@@ -18,11 +19,25 @@ export const POST: RequestHandler = async ({ request }) => {
 	}
 
 	await websharexDb.createRoom(name, password);
+	
+	try {
+		await createKeepFile(`websharex/${name}`);
+	} catch (error) {
+		console.error('Failed to create .keep file:', error);
+	}
+	
 	return json({ success: true, password });
 };
 
 export const DELETE: RequestHandler = async ({ request }) => {
 	const { name } = await request.json();
+	
+	try {
+		await deleteFolder(`websharex/${name}/`);
+	} catch (error) {
+		console.error('Failed to delete OSS folder:', error);
+	}
+	
 	await websharexDb.deleteRoom(name);
 	return json({ success: true });
 };

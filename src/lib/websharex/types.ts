@@ -13,11 +13,9 @@ export interface FileEntry extends BaseEntry {
 	type: 'file';
 	size: number;
 	mimeType: string;
-	/**
-	 * Base64 encoded file contents for demo purposes.
-	 * In production this would point to external object storage.
-	 */
 	payload: string;
+	ossObjectName?: string;
+	ossUrl?: string;
 	expiresAt: string | null;
 	sharedPassword: string | null;
 	shareToken: string | null;

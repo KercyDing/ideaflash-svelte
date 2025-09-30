@@ -223,7 +223,11 @@ export function createWebsharexStore() {
 			return derived(state, ($state) => {
 				const room = $state.rooms[roomName];
 				if (!room) return [];
-				return room.entries.filter((entry) => entry.parentId === room.currentFolderId);
+				return room.entries.filter(
+					(entry) =>
+						entry.parentId === room.currentFolderId &&
+						entry.name !== '.keep'
+				);
 			});
 		},
 		listRoomNames(): string[] {
@@ -297,97 +301,147 @@ export function createWebsharexStore() {
 			if (!room) {
 				throw new Error('房间不存在');
 			}
-			const list = Array.from(files);
+
+			const formData = new FormData();
+			const fileList = Array.from(files);
+			fileList.forEach((file) => {
+				formData.append('files', file);
+			});
+			
 			const parentId = room.currentFolderId ?? null;
-			const now = new Date();
-			const payloads = await Promise.all(
-				list.map(async (file) => {
-					const base64 = await toBase64(file);
-					const entry: FileEntry = {
-						id: nanoid(),
-						name: file.name,
-						type: 'file',
-						parentId,
-						size: file.size,
-						mimeType: file.type || 'application/octet-stream',
-						payload: base64,
-						createdAt: now.toISOString(),
-						updatedAt: now.toISOString(),
-						expiresAt: null,
-						sharedPassword: null,
-						shareToken: null,
-						shareCreatedAt: null
-					};
-					return entry;
-				})
-			);
-			updateRoom(roomName, (room) => ({
-				...room,
-				entries: [...room.entries, ...payloads],
-				updatedAt: new Date().toISOString()
-			}));
+			if (parentId) {
+				formData.append('parentId', parentId);
+			}
+
+			const response = await fetch(`/api/websharex/rooms/${encodeURIComponent(roomName)}/files`, {
+				method: 'POST',
+				body: formData
+			});
+
+			if (!response.ok) {
+				const error = await response.json();
+				throw new Error(error.error || '上传失败');
+			}
+
+			const { entries: newEntries } = await response.json();
+
+			update((current) => {
+				const room = current.rooms[roomName];
+				if (!room) return current;
+				return {
+					...current,
+					rooms: {
+						...current.rooms,
+						[roomName]: {
+							...room,
+							entries: [...room.entries, ...newEntries],
+							updatedAt: new Date().toISOString()
+						}
+					}
+				};
+			});
 		},
-		createFolder(roomName: string, rawName: string) {
+		async createFolder(roomName: string, rawName: string) {
 			const room = ensureRoom(roomName);
 			if (!room) {
 				throw new Error('房间不存在');
 			}
 			const name = rawName.trim();
 			if (!name) return;
+
 			const parentId = room.currentFolderId ?? null;
-			const folder: FolderEntry = {
-				id: nanoid(),
-				name,
-				type: 'folder',
-				parentId,
-				createdAt: new Date().toISOString(),
-				updatedAt: new Date().toISOString()
-			};
-			updateRoom(roomName, (room) => ({
-				...room,
-				entries: [...room.entries, folder],
-				updatedAt: new Date().toISOString()
-			}));
-		},
-		renameEntry(roomName: string, id: string, rawNextName: string) {
-			const name = rawNextName.trim();
-			if (!name) return;
-			updateRoom(roomName, (room) => ({
-				...room,
-				entries: room.entries.map((entry) =>
-					entry.id === id
-						? { ...entry, name, updatedAt: new Date().toISOString() }
-						: entry
-				),
-				updatedAt: new Date().toISOString()
-			}));
-		},
-		deleteEntry(roomName: string, id: string) {
-			updateRoom(roomName, (room) => {
-				const removeSet = new Set<string>([id]);
-				let changed = true;
-				while (changed) {
-					changed = false;
-					for (const entry of room.entries) {
-						const parentId = entry.parentId;
-						if (parentId && removeSet.has(parentId)) {
-							if (!removeSet.has(entry.id)) {
-								removeSet.add(entry.id);
-								changed = true;
-							}
+
+			const response = await fetch(`/api/websharex/rooms/${encodeURIComponent(roomName)}/folders`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ folderName: name, parentId })
+			});
+
+			if (!response.ok) {
+				const error = await response.json();
+				throw new Error(error.error || '创建文件夹失败');
+			}
+
+			const { folder } = await response.json();
+
+			update((current) => {
+				const room = current.rooms[roomName];
+				if (!room) return current;
+				return {
+					...current,
+					rooms: {
+						...current.rooms,
+						[roomName]: {
+							...room,
+							entries: [...room.entries, folder],
+							updatedAt: new Date().toISOString()
 						}
 					}
-				}
-
-				const nextEntries = room.entries.filter((entry) => !removeSet.has(entry.id));
-				const nextFolderId = removeSet.has(room.currentFolderId ?? '') ? null : room.currentFolderId;
-				return {
-					...room,
-					entries: nextEntries,
-					currentFolderId: nextFolderId,
-					updatedAt: new Date().toISOString()
 				};
 			});
+		},
+		async renameEntry(roomName: string, id: string, rawNextName: string) {
+			const name = rawNextName.trim();
+			if (!name) return;
+
+			const response = await fetch(
+				`/api/websharex/rooms/${encodeURIComponent(roomName)}/entries/${id}`,
+				{
+					method: 'PATCH',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ newName: name })
+				}
+			);
+
+			if (!response.ok) {
+				const error = await response.json();
+				throw new Error(error.error || '重命名失败');
+			}
+
+			update((current) => {
+				const room = current.rooms[roomName];
+				if (!room) return current;
+				return {
+					...current,
+					rooms: {
+						...current.rooms,
+						[roomName]: {
+							...room,
+							entries: room.entries.map((entry) =>
+								entry.id === id
+									? { ...entry, name, updatedAt: new Date().toISOString() }
+									: entry
+							),
+							updatedAt: new Date().toISOString()
+						}
+					}
+				};
+			});
+		},
+		async deleteEntry(roomName: string, id: string) {
+			const response = await fetch(
+				`/api/websharex/rooms/${encodeURIComponent(roomName)}/entries/${id}`,
+				{
+					method: 'DELETE'
+				}
+			);
+
+			if (!response.ok) {
+				const error = await response.json();
+				throw new Error(error.error || '删除失败');
+			}
+
+			// 重新获取房间数据以保持一致性
+			const room = await apiGetRoom(roomName);
+			if (room) {
+				update((current) => ({
+					...current,
+					rooms: {
+						...current.rooms,
+						[roomName]: room
+					}
+				}));
+			}
 		},
 		setShareOptions(
 			roomName: string,
@@ -445,17 +499,37 @@ export function createWebsharexStore() {
 			}
 			return undefined;
 		},
-		downloadFile(roomName: string, id: string) {
+		async downloadFile(roomName: string, id: string) {
 			const room = ensureRoom(roomName);
 			if (!room) return;
 			const entry = room.entries.find((item) => item.id === id);
 			if (!entry || entry.type !== 'file') return;
 
-			const url = `data:${entry.mimeType};base64,${entry.payload}`;
-			const anchor = document.createElement('a');
-			anchor.href = url;
-			anchor.download = entry.name;
-			anchor.click();
+			try {
+				const response = await fetch(
+					`/api/websharex/rooms/${encodeURIComponent(roomName)}/files/${id}`
+				);
+				if (!response.ok) {
+					throw new Error('获取文件失败');
+				}
+
+				const { url, name } = await response.json();
+				const anchor = document.createElement('a');
+				anchor.href = url;
+				anchor.download = name;
+				anchor.target = '_blank';
+				anchor.click();
+			} catch (error) {
+				console.error('Download failed:', error);
+				
+				if (entry.payload) {
+					const url = `data:${entry.mimeType};base64,${entry.payload}`;
+					const anchor = document.createElement('a');
+					anchor.href = url;
+					anchor.download = entry.name;
+					anchor.click();
+				}
+			}
 		}
 	};
 }

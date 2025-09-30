@@ -49,6 +49,7 @@
 	let lastRoomName = '';
 	let sortBy: 'name' | 'size' | 'time' = 'name';
 	let sortOrder: 'asc' | 'desc' = 'asc';
+	let isDraggingOver = false;
 
 	const origin = browser ? window.location.origin : '';
 
@@ -134,6 +135,7 @@
 	function handleDrop(event: DragEvent) {
 		if (!ensureRoomAvailable()) return;
 		event.preventDefault();
+		isDraggingOver = false;
 		if (event.dataTransfer?.files?.length) {
 			void websharexStore.uploadFiles(roomName, event.dataTransfer.files);
 		}
@@ -141,6 +143,12 @@
 
 	function handleDragOver(event: DragEvent) {
 		event.preventDefault();
+		isDraggingOver = true;
+	}
+
+	function handleDragLeave(event: DragEvent) {
+		event.preventDefault();
+		isDraggingOver = false;
 	}
 
 	function createFolder() {
@@ -331,76 +339,42 @@
 	</div>
 {:else}
 	<div class="space-y-6 py-6">
+		<!-- 房间密码和操作按钮 -->
 		<div class="flex flex-wrap items-center justify-between gap-3">
-			<div class="flex flex-col gap-3">
-				<div class="flex flex-wrap items-center gap-1 text-sm text-muted-foreground">
+			<div class="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+				<span class="text-xs font-semibold">房间密码</span>
+				{#if roomPassword}
+					<span class="rounded bg-muted px-2 py-1 font-mono text-sm text-foreground">
+						{showPassword ? roomPassword : maskedPassword}
+					</span>
 					<button
 						type="button"
-						class={`inline-flex items-center gap-1 rounded px-2 py-1 transition hover:bg-muted/60 ${
-							room.currentFolderId === null ? 'font-medium text-foreground' : ''
-						}`}
-						on:click={() => navigateToFolder(null)}
+						class="inline-flex items-center gap-1 rounded border px-2 py-1 text-xs hover:bg-muted"
+						on:click={togglePasswordVisibility}
 					>
-						{displayRoomName}
+						<Icon
+							icon={showPassword ? 'mdi:eye-off-outline' : 'mdi:eye-outline'}
+							class="h-4 w-4"
+						/>
+						{showPassword ? '隐藏' : '显示'}
 					</button>
-					<Icon
-						icon="mdi:chevron-right"
-						class={`h-4 w-4 ${breadcrumbs.length === 0 ? 'text-muted-foreground/40' : ''}`}
-					/>
-					{#if breadcrumbs.length === 0}
-						<span class="inline-flex min-w-[1ch] px-2 py-1">&nbsp;</span>
-					{:else}
-						{#each breadcrumbs as crumb, index}
-							<button
-								type="button"
-								class={`inline-flex items-center gap-1 rounded px-2 py-1 transition hover:bg-muted/60 ${
-									crumb.id === room.currentFolderId ? 'font-medium text-foreground' : ''
-								}`}
-								on:click={() => navigateToFolder(crumb.id)}
-							>
-								{crumb.name}
-							</button>
-							{#if index < breadcrumbs.length - 1}
-								<Icon icon="mdi:chevron-right" class="h-4 w-4" />
-							{/if}
-						{/each}
-					{/if}
-				</div>
-				<div class="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-					<span class="text-xs font-semibold">房间密码</span>
-					{#if roomPassword}
-						<span class="rounded bg-muted px-2 py-1 font-mono text-sm text-foreground">
-							{showPassword ? roomPassword : maskedPassword}
-						</span>
-						<button
-							type="button"
-							class="inline-flex items-center gap-1 rounded border px-2 py-1 text-xs hover:bg-muted"
-							on:click={togglePasswordVisibility}
-						>
-							<Icon
-								icon={showPassword ? 'mdi:eye-off-outline' : 'mdi:eye-outline'}
-								class="h-4 w-4"
-							/>
-							{showPassword ? '隐藏' : '显示'}
-						</button>
-						<button
-							type="button"
-							class="inline-flex items-center gap-1 rounded border px-2 py-1 text-xs hover:bg-muted"
-							on:click={copyRoomPassword}
-						>
-							<Icon icon="mdi:content-copy" class="h-3.5 w-3.5" />
-							{passwordCopyStatus === 'copied'
-								? '已复制'
-								: passwordCopyStatus === 'error'
-									? '复制失败'
-									: '复制'}
-						</button>
-					{:else}
-						<span class="rounded bg-muted px-2 py-1 font-mono text-sm text-muted-foreground">
-							未设置
-						</span>
-					{/if}
-				</div>
+					<button
+						type="button"
+						class="inline-flex items-center gap-1 rounded border px-2 py-1 text-xs hover:bg-muted"
+						on:click={copyRoomPassword}
+					>
+						<Icon icon="mdi:content-copy" class="h-3.5 w-3.5" />
+						{passwordCopyStatus === 'copied'
+							? '已复制'
+							: passwordCopyStatus === 'error'
+								? '复制失败'
+								: '复制'}
+					</button>
+				{:else}
+					<span class="rounded bg-muted px-2 py-1 font-mono text-sm text-muted-foreground">
+						未设置
+					</span>
+				{/if}
 			</div>
 
 			<div class="flex flex-wrap items-center gap-2">
@@ -441,14 +415,51 @@
 		{/if}
 
 		<div
-			class="grid gap-4 rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground"
+			class="grid gap-4 rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground transition-colors {isDraggingOver ? 'border-primary bg-primary/5 border-2' : ''}"
 			on:drop={handleDrop}
 			on:dragover={handleDragOver}
+			on:dragleave={handleDragLeave}
 			role="region"
 			aria-label="拖拽文件上传区域"
 		>
-			<Icon icon="mdi:inbox-arrow-down" class="mx-auto h-10 w-10 text-primary" />
-			<div class="font-medium text-foreground">拖拽文件至此上传</div>
+			<Icon icon="mdi:inbox-arrow-down" class="mx-auto h-10 w-10 {isDraggingOver ? 'text-primary scale-110' : 'text-primary'} transition-transform" />
+			<div class="font-medium {isDraggingOver ? 'text-primary' : 'text-foreground'} transition-colors">拖拽文件或文件夹至此上传</div>
+		</div>
+
+		<!-- 面包屑导航 -->
+		<div class="flex flex-wrap items-center text-sm text-muted-foreground mb-2">
+			<span class="pr-0">~/</span>
+			<button
+				type="button"
+				class={`inline-flex items-center gap-1 rounded px-2 py-1 transition hover:bg-muted/60 ${
+					room.currentFolderId === null ? 'font-medium text-foreground' : ''
+				}`}
+				on:click={() => navigateToFolder(null)}
+			>
+				{displayRoomName}
+			</button>
+			<Icon
+				icon="mdi:chevron-right"
+				class={`h-4 w-4 ml-1 ${breadcrumbs.length === 0 ? 'text-muted-foreground/40' : ''}`}
+			/>
+			{#if breadcrumbs.length === 0}
+				<span class="inline-flex min-w-[1ch] px-2 py-1">&nbsp;</span>
+			{:else}
+				{#each breadcrumbs as crumb, index}
+					<button
+						type="button"
+						class={`inline-flex items-center gap-1 rounded px-2 py-1 ml-1 transition hover:bg-muted/60 ${
+							crumb.id === room.currentFolderId ? 'font-medium text-foreground' : ''
+						}`}
+						on:click={() => navigateToFolder(crumb.id)}
+					>
+						{crumb.name}
+					</button>
+					{#if index < breadcrumbs.length - 1}
+						<Icon icon="mdi:chevron-right" class="h-4 w-4 ml-1" />
+					{/if}
+				{/each}
+			{/if}
 		</div>
 
 		<div class="overflow-hidden rounded-lg border">
