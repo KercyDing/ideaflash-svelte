@@ -181,23 +181,6 @@ export function createWebsharexStore() {
 		listRoomNames(): string[] {
 			return Object.keys(get(state).rooms);
 		},
-		deleteRoom(rawName: string) {
-			const name = rawName.trim();
-			if (!name) return false;
-			let deleted = false;
-			update((current) => {
-				if (!current.rooms[name]) {
-					return current;
-				}
-				const { [name]: _removed, ...rest } = current.rooms;
-				deleted = true;
-				return {
-					...current,
-					rooms: rest
-				};
-			});
-			return deleted;
-		},
 		createRoom(rawName: string, rawPassword?: string) {
 			const name = rawName.trim();
 			if (!name) {
@@ -235,6 +218,18 @@ export function createWebsharexStore() {
 				password: nextPassword,
 				updatedAt: new Date().toISOString()
 			}));
+		},
+		deleteRoom(name: string) {
+			const room = ensureRoom(name.trim());
+			if (!room) return false;
+			update((current) => {
+				const { [name]: _removed, ...remainingRooms } = current.rooms;
+				return {
+					...current,
+					rooms: remainingRooms
+				};
+			});
+			return true;
 		},
 		setCurrentFolder(roomName: string, id: string | null) {
 			updateRoom(roomName, (room) => ({
