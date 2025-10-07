@@ -8,6 +8,7 @@ import type {
 	WebsharexEntry,
 	WebsharexState
 } from './types';
+import { uploadProgress } from './upload-progress';
 
 const DEFAULT_STATE: WebsharexState = { rooms: {} };
 
@@ -303,6 +304,10 @@ export function createWebsharexStore() {
 
 			const formData = new FormData();
 			const fileList = Array.from(files);
+			
+			// 为每个文件创建上传任务（仅显示加载状态）
+			const taskIds = fileList.map(file => uploadProgress.addTask(file.name));
+			
 			fileList.forEach((file) => {
 				formData.append('files', file);
 			});
@@ -312,32 +317,57 @@ export function createWebsharexStore() {
 				formData.append('parentId', parentId);
 			}
 
-			const response = await fetch(`/api/websharex/rooms/${encodeURIComponent(roomName)}/files`, {
-				method: 'POST',
-				body: formData
-			});
+			// 使用XMLHttpRequest
+			return new Promise((resolve, reject) => {
+				const xhr = new XMLHttpRequest();
 
-			if (!response.ok) {
-				const error = await response.json();
-				throw new Error(error.error || '上传失败');
-			}
+				xhr.addEventListener('load', async () => {
+					if (xhr.status >= 200 && xhr.status < 300) {
+						try {
+							const result = JSON.parse(xhr.responseText);
+							const { entries: newEntries } = result;
 
-			const { entries: newEntries } = await response.json();
+							update((current) => {
+								const room = current.rooms[roomName];
+								if (!room) return current;
+								return {
+									...current,
+									rooms: {
+										...current.rooms,
+										[roomName]: {
+											...room,
+											entries: [...room.entries, ...newEntries],
+											updatedAt: new Date().toISOString()
+										}
+									}
+								};
+							});
 
-			update((current) => {
-				const room = current.rooms[roomName];
-				if (!room) return current;
-				return {
-					...current,
-					rooms: {
-						...current.rooms,
-						[roomName]: {
-							...room,
-							entries: [...room.entries, ...newEntries],
-							updatedAt: new Date().toISOString()
+							// 标记所有任务完成
+							taskIds.forEach(taskId => uploadProgress.completeTask(taskId));
+							resolve(result);
+						} catch (error) {
+							taskIds.forEach(taskId => uploadProgress.failTask(taskId));
+							reject(error);
+						}
+					} else {
+						taskIds.forEach(taskId => uploadProgress.failTask(taskId));
+						try {
+							const error = JSON.parse(xhr.responseText);
+							reject(new Error(error.error || '上传失败'));
+						} catch {
+							reject(new Error('上传失败'));
 						}
 					}
-				};
+				});
+
+				xhr.addEventListener('error', () => {
+					taskIds.forEach(taskId => uploadProgress.failTask(taskId));
+					reject(new Error('上传失败'));
+				});
+
+				xhr.open('POST', `/api/websharex/rooms/${encodeURIComponent(roomName)}/files`);
+				xhr.send(formData);
 			});
 		},
 		async createFolder(roomName: string, rawName: string) {
@@ -563,6 +593,15 @@ export function createWebsharexStore() {
 				console.error('Sync failed:', error);
 				throw error;
 			}
+		},
+		updateRoomState(roomName: string, roomState: RoomState) {
+			update((current) => ({
+				...current,
+				rooms: {
+					...current.rooms,
+					[roomName]: roomState
+				}
+			}));
 		}
 	};
 }

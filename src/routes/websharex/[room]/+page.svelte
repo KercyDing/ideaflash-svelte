@@ -7,6 +7,7 @@
 	import { derived } from 'svelte/store';
 	import { websharexStore } from '$lib/websharex/store';
 	import type { RoomState, WebsharexEntry } from '$lib/websharex/types';
+	import UploadToast from '$lib/components/UploadToast.svelte';
 
 	const roomNameStore = derived(page, ($page) => decodeURIComponent($page.params.room ?? ''));
 	const roomStateStore = derived([roomNameStore, websharexStore], ([$roomName, $state]) =>
@@ -52,7 +53,8 @@
 	let sortOrder: 'asc' | 'desc' = 'asc';
 	let isDraggingOver = false;
 	let isSyncing = false;
-	let autoSyncInterval: ReturnType<typeof setInterval> | null = null;
+	let isUploading = false;
+	let ossMonitorInterval: ReturnType<typeof setInterval> | null = null;
 
 	const origin = browser ? window.location.origin : '';
 
@@ -102,9 +104,6 @@
 		showPassword = false;
 		passwordCopyStatus = 'idle';
 		deleteError = '';
-		if (browser) {
-			syncWithOSS().catch(err => console.error('Auto sync failed:', err));
-		}
 	} else if (!roomName && lastRoomName) {
 		lastRoomName = '';
 		showPassword = false;
@@ -129,7 +128,6 @@
 				if (child.type === 'file') {
 					totalSize += child.size || 0;
 				} else if (child.type === 'folder') {
-					// 递归计算子文件夹
 					calculateRecursive(child.id);
 				}
 			}
@@ -152,21 +150,31 @@
 		}
 	}
 
-	function handleFilesSelected(event: Event) {
+	async function handleFilesSelected(event: Event) {
 		if (!ensureRoomAvailable()) return;
 		const target = event.target as HTMLInputElement;
 		if (target.files) {
-			void websharexStore.uploadFiles(roomName, target.files);
+			isUploading = true;
+			try {
+				await websharexStore.uploadFiles(roomName, target.files);
+			} finally {
+				isUploading = false;
+			}
 			target.value = '';
 		}
 	}
 
-	function handleDrop(event: DragEvent) {
+	async function handleDrop(event: DragEvent) {
 		if (!ensureRoomAvailable()) return;
 		event.preventDefault();
 		isDraggingOver = false;
 		if (event.dataTransfer?.files?.length) {
-			void websharexStore.uploadFiles(roomName, event.dataTransfer.files);
+			isUploading = true;
+			try {
+				await websharexStore.uploadFiles(roomName, event.dataTransfer.files);
+			} finally {
+				isUploading = false;
+			}
 		}
 	}
 
@@ -336,7 +344,8 @@
 		isSyncing = true;
 		
 		try {
-			await websharexStore.syncRoom(roomName);
+			const result = await websharexStore.syncRoom(roomName);
+			return result;
 		} catch (error) {
 			console.error('Sync failed:', error);
 		} finally {
@@ -344,23 +353,51 @@
 		}
 	}
 
-	// 启动自动同步定时器
-	onMount(() => {
-		setTimeout(() => {
-			if (browser && roomName) {
-				syncWithOSS().catch(err => console.error('Initial sync failed:', err));
-				
-				autoSyncInterval = setInterval(() => {
-					syncWithOSS().catch(err => console.error('Auto sync failed:', err));
-				}, 5000);
+	async function checkOSSChanges() {
+		if (!ensureRoomAvailable() || isSyncing || isUploading) return;
+		
+		try {
+			const resp = await fetch(`/api/websharex/rooms/${encodeURIComponent(roomName)}/sync`, {
+				method: 'POST'
+			});
+			
+			if (!resp.ok) return;
+			
+			const result = await resp.json();
+			
+			if (result.success && (result.removedCount > 0 || result.addedCount > 0)) {
+				isSyncing = true;
+				try {
+					const roomResp = await fetch(`/api/websharex/rooms/${encodeURIComponent(roomName)}`);
+					if (roomResp.ok) {
+						const data = await roomResp.json();
+						if (data.room) {
+							websharexStore.updateRoomState(roomName, data.room);
+						}
+					}
+				} finally {
+					isSyncing = false;
+				}
 			}
-		}, 100);
+		} catch (error) {
+			console.error('OSS check failed:', error);
+		}
+	}
+
+	onMount(() => {
+		if (browser && roomName) {
+			syncWithOSS().catch(err => console.error('Initial sync failed:', err));
+			
+			ossMonitorInterval = setInterval(() => {
+				checkOSSChanges().catch(err => console.error('Monitor check failed:', err));
+			}, 3000);
+		}
 	});
 
 	onDestroy(() => {
-		if (autoSyncInterval) {
-			clearInterval(autoSyncInterval);
-			autoSyncInterval = null;
+		if (ossMonitorInterval) {
+			clearInterval(ossMonitorInterval);
+			ossMonitorInterval = null;
 		}
 	});
 
@@ -490,39 +527,51 @@
 		</div>
 
 		<!-- 面包屑导航 -->
-		<div class="flex flex-wrap items-center text-sm text-muted-foreground mb-2">
-			<span class="pr-0">~/</span>
+		<div class="flex flex-wrap items-center justify-between text-sm text-muted-foreground mb-2">
+			<div class="flex flex-wrap items-center">
+				<span class="pr-0">~/</span>
+				<button
+					type="button"
+					class={`inline-flex items-center gap-1 rounded px-2 py-1 transition hover:bg-muted/60 ${
+						room.currentFolderId === null ? 'font-medium text-foreground' : ''
+					}`}
+					on:click={() => navigateToFolder(null)}
+				>
+					{displayRoomName}
+				</button>
+				<Icon
+					icon="mdi:chevron-right"
+					class={`h-4 w-4 ml-1 ${breadcrumbs.length === 0 ? 'text-muted-foreground/40' : ''}`}
+				/>
+				{#if breadcrumbs.length === 0}
+					<span class="inline-flex min-w-[1ch] px-2 py-1">&nbsp;</span>
+				{:else}
+					{#each breadcrumbs as crumb, index}
+						<button
+							type="button"
+							class={`inline-flex items-center gap-1 rounded px-2 py-1 ml-1 transition hover:bg-muted/60 ${
+								crumb.id === room.currentFolderId ? 'font-medium text-foreground' : ''
+							}`}
+							on:click={() => navigateToFolder(crumb.id)}
+						>
+							{crumb.name}
+						</button>
+						{#if index < breadcrumbs.length - 1}
+							<Icon icon="mdi:chevron-right" class="h-4 w-4 ml-1" />
+						{/if}
+					{/each}
+				{/if}
+			</div>
+			
 			<button
 				type="button"
-				class={`inline-flex items-center gap-1 rounded px-2 py-1 transition hover:bg-muted/60 ${
-					room.currentFolderId === null ? 'font-medium text-foreground' : ''
-				}`}
-				on:click={() => navigateToFolder(null)}
+				class="inline-flex items-center gap-1.5 rounded border px-2.5 py-1.5 text-xs font-medium transition hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
+				on:click={syncWithOSS}
+				disabled={isSyncing}
 			>
-				{displayRoomName}
+				<Icon icon={isSyncing ? 'mdi:loading' : 'mdi:refresh'} class={`h-3.5 w-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+				{isSyncing ? '刷新中...' : '刷新'}
 			</button>
-			<Icon
-				icon="mdi:chevron-right"
-				class={`h-4 w-4 ml-1 ${breadcrumbs.length === 0 ? 'text-muted-foreground/40' : ''}`}
-			/>
-			{#if breadcrumbs.length === 0}
-				<span class="inline-flex min-w-[1ch] px-2 py-1">&nbsp;</span>
-			{:else}
-				{#each breadcrumbs as crumb, index}
-					<button
-						type="button"
-						class={`inline-flex items-center gap-1 rounded px-2 py-1 ml-1 transition hover:bg-muted/60 ${
-							crumb.id === room.currentFolderId ? 'font-medium text-foreground' : ''
-						}`}
-						on:click={() => navigateToFolder(crumb.id)}
-					>
-						{crumb.name}
-					</button>
-					{#if index < breadcrumbs.length - 1}
-						<Icon icon="mdi:chevron-right" class="h-4 w-4 ml-1" />
-					{/if}
-				{/each}
-			{/if}
 		</div>
 
 		<div class="overflow-hidden rounded-lg border">
@@ -822,3 +871,5 @@
 		{/if}
 	</div>
 {/if}
+
+<UploadToast />

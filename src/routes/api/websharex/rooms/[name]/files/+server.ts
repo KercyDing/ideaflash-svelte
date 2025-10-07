@@ -34,29 +34,20 @@ export const POST: RequestHandler = async ({ request, params }) => {
 	try {
 		const folderPath = parentId ? buildFolderPath(room.entries, parentId) : '';
 		
-		const uploadedFiles = [];
-		
-		for (const file of files) {
-			const result = await uploadFile(file, {
-				roomName,
-				folder: folderPath,
-				fileName: file.name,
-				preserveFileName: true
-			});
-		uploadedFiles.push(result);
-	}
-	
-	try {
-		const keepfolderPath = folderPath 
-			? `websharex/${roomName}/${folderPath}/.keepfolder`
-			: `websharex/${roomName}/.keepfolder`;
-		await deleteFile(keepfolderPath);
-	} catch (err) {
-	}		const uploadResults = await uploadMultipleFiles(files, {
+		const uploadResults = await uploadMultipleFiles(files, {
 			folder: folderPath || undefined,
 			roomName,
 			preserveFileName: true
-		});		const now = new Date().toISOString();
+		});
+		
+		try {
+			const keepfolderPath = folderPath 
+				? `websharex/${roomName}/${folderPath}/.keepfolder`
+				: `websharex/${roomName}/.keepfolder`;
+			await deleteFile(keepfolderPath);
+		} catch (err) {}
+		
+		const now = new Date().toISOString();
 		const newEntries: FileEntry[] = uploadResults.map((result, index) => ({
 			id: nanoid(),
 			name: files[index].name,
@@ -75,10 +66,19 @@ export const POST: RequestHandler = async ({ request, params }) => {
 			shareCreatedAt: null
 		}));
 
-		const updatedEntries = [...room.entries, ...newEntries];
+		const existingOssNames = new Set(
+			room.entries
+				.filter((e): e is FileEntry => e.type === 'file' && !!e.ossObjectName)
+				.map(e => e.ossObjectName!)
+		);
+		
+		const uniqueNewEntries = newEntries.filter(e => e.ossObjectName && !existingOssNames.has(e.ossObjectName));
+
+		const updatedEntries = [...room.entries, ...uniqueNewEntries];
+		
 		await websharexDb.updateRoom(roomName, { entries: updatedEntries });
 
-		return json({ success: true, entries: newEntries });
+		return json({ success: true, entries: uniqueNewEntries });
 	} catch (error) {
 		console.error('Upload failed:', error);
 		return json({ error: '上传失败' }, { status: 500 });

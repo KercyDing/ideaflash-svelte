@@ -58,6 +58,7 @@
 		"better-sqlite3": "^12.4.1",
 		"chart.js": "^4.5.0",
 		"drizzle-orm": "^0.44.5",
+		"lucide-svelte": "^0.544.0",
 		"mysql2": "^3.15.1",
 		"nanoid": "^5.1.6"
 	}
